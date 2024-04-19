@@ -9,3 +9,4 @@ Author: Willis Jones
 For this project, I have been asked to work with Frito Lay on analyzing data related to employee attrition. We were also asked to examine the variables that predict employee salary.  I was provided data from 870 employees, and the dataset included 36 variables.  Data analysis for this project was done using RStudio.
 
 ### Link to Video Presentation
+https://youtu.be/MC2nMaEB0UU
