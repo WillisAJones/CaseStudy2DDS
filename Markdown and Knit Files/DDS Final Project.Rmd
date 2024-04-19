@@ -1,0 +1,344 @@
+---
+title: "Final Project - DDS"
+author: "Willis"
+date: "2024-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Packages and Data}
+
+#install.packages("RCurl")
+library(RCurl)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(magrittr)
+library(readr)
+library(olsrr)
+library(mlr)
+library(vcd)
+
+#Bring in the Dataset
+
+
+df <- read.csv ("C:/Users/willj/OneDrive - Southern Methodist University/Data Science Master's Degree/1 SMU Courses/Doing Data Science/Week 14 - Apr 9  2024/Data/CaseStudy2-data.csv", stringsAsFactors = TRUE)
+
+#View a summary of the variables in the Dataset
+summary(df)
+
+```
+
+
+
+```{r}
+
+# Quick EDA
+
+#EDA....look at how some of the variables related to attrition visually
+
+#Overall Attrition 
+df %>% 
+  group_by(Attrition) %>% 
+  summarise(number = n()) %>% 
+  mutate(freq = (number / sum(number))*100) %>% 
+  ggplot(aes(x = Attrition, y = freq, fill = Attrition)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(freq,0), "%")), 
+            position = position_stack(vjust = 0.5), size = 3) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  labs(title = "Attrition", x = "Attrition", y = "Percentage") +
+  scale_fill_manual(values = c("#59C3C3",  "#F9C80E"))
+
+
+#They ask spacifically about attrition by job role
+df %>% 
+  group_by(JobRole, Attrition) %>% 
+  summarise(cnt = n()) %>% 
+  mutate(freq = (cnt / sum(cnt))*100) %>% 
+  ggplot(aes(x = JobRole, y = freq, fill = Attrition)) +
+  geom_bar(position = position_stack(), stat = "identity", width = .7) +
+  geom_text(aes(label = paste0(round(freq,0), "%")), 
+            position = position_stack(vjust = 0.5), size = 3) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  labs(title = "Job Role and Attrition", x = "Job Role", y = "Percentage") +
+  scale_fill_manual(values = c("#59c3c3",  "#F9C80E")) +
+  theme(axis.text.x = element_text(angle = 15, hjust = 0.5))
+
+```
+
+To identify the variables strongest corrolation with attrition, I ran two correlation
+
+
+```{r}
+
+#Remove variables I don't need or variables with no variation in the outcome
+
+df2 = subset(df, select  = -c(ID, EmployeeCount, Over18, StandardHours))
+
+#Now turn all variables into numeric variables to see get a corrolation matrix
+df2$Attrition = as.numeric(df2$Attrition)
+df2$BusinessTravel = as.numeric(df2$BusinessTravel)
+df2$Department = as.numeric(df2$Department)
+df2$EducationField = as.numeric(df2$EducationField)
+df2$JobRole = as.numeric(df2$JobRole)
+df2$MaritalStatus = as.numeric(df2$MaritalStatus)
+df2$Gender = as.numeric(df2$Gender)
+df2$OverTime = as.numeric(df2$OverTime)
+
+correlation_matrix = cor(df2)
+
+attrition_correlations = subset(correlation_matrix, select = (Attrition))
+
+#Also, as a check of these corrolations, run CramerZ look for all catagorical variables
+
+
+# Function to calculate Cramér's V for a pair of variables
+calculate_cramer_v = function(df, var1, var2) {
+  cont_table = table(df[[var1]], df[[var2]])
+  cramer_v = assocstats(cont_table)$cramer
+  return(cramer_v)
+}
+
+# Get all pairs of categorical variables
+cat_vars = names(df)[sapply(df, is.factor)]
+pairs = combn(cat_vars, 2)
+
+# Calculate Cramér's V for each pair
+results = data.frame(Variable1 = character(), Variable2 = character(), CramerV = numeric())
+
+for (i in 1:ncol(pairs)) {
+  var1 <- pairs[1, i]
+  var2 <- pairs[2, i]
+  cramer_v <- calculate_cramer_v(df, var1, var2)
+  results <- rbind(results, data.frame(Variable1 = var1, Variable2 = var2, CramerV = cramer_v))
+}
+
+# Print the results
+print(results)
+
+
+#From these two correlation matrices, there are 3 variables that seem to have high correlations
+
+#Overtime, Marital Status, Job Role have most association with Attrition
+
+```
+
+
+
+# Use the three varaibales Identified with NB algarithem and to check the predictive power.  Add more highly corrolated variables if these 3 variables do not achieve 60% specificity and sensititity 
+
+```{r}
+
+
+df_top3 = subset(df, select = c(OverTime, JobRole, MaritalStatus, Attrition))
+
+AttritionTask <- makeClassifTask(data = df_top3, target = "Attrition")
+
+bayes <- makeLearner("classif.naiveBayes")
+
+bayesModel <- train(bayes, AttritionTask)
+
+
+bayesPred <- predict(bayesModel, newdata = df_top3)
+
+performance(bayesPred, measures = list(mmce, acc)) 
+
+calculateROCMeasures(bayesPred)
+
+
+#Validation of Bayes model
+kFold <- makeResampleDesc(method = "RepCV", folds = 10, reps = 50,
+                          stratify = TRUE)
+
+bayesCV <- resample(learner = bayes, task = AttritionTask,
+                    resampling = kFold,
+                    measures = list(mmce, acc, fpr, fnr))
+
+bayesCV$aggr
+
+calculateConfusionMatrix(bayesCV$pred, relative = TRUE)
+calculateROCMeasures(bayesCV$pred)
+
+
+
+
+
+#This model only has 23% specificity, so I added more to the model.  Eventually, I ended up  with this model
+
+df_bas = subset(df, select  = c(Attrition, OverTime, MaritalStatus, JobInvolvement, TotalWorkingYears, JobLevel, YearsInCurrentRole, MonthlyIncome, Age, StockOptionLevel, YearsWithCurrManager, YearsAtCompany, JobSatisfaction, WorkLifeBalance, JobRole, DistanceFromHome, Department))
+
+
+AttritionTask <- makeClassifTask(data = df_bas, target = "Attrition")
+bayes <- makeLearner("classif.naiveBayes")
+bayesModel <- train(bayes, AttritionTask)
+bayesPred <- predict(bayesModel, newdata = df_bas)
+performance(bayesPred, measures = list(mmce, acc)) 
+calculateROCMeasures(bayesPred)
+
+#Validation of Bayes model
+kFold <- makeResampleDesc(method = "RepCV", folds = 10, reps = 50,
+                          stratify = TRUE)
+
+bayesCV <- resample(learner = bayes, task = AttritionTask,
+                    resampling = kFold,
+                    measures = list(mmce, acc, fpr, fnr))
+
+bayesCV$aggr
+
+calculateConfusionMatrix(bayesCV$pred, relative = TRUE)
+calculateROCMeasures(bayesCV$pred)
+
+
+```
+
+```{r}
+
+#Make predictions with new data
+
+testData <- read_csv("Data/CaseStudy2CompSet No Attrition.csv")
+
+predictions <- predict(bayesModel, newdata = testData)
+
+predictions_df <- data.frame(PredictedValue = predictions)
+id_variable <- seq(1171, 1470)
+
+predictions_df$ID = id_variable
+
+table(predictions_df$response)
+
+
+write.csv(predictions_df, "Case2PredictionsJones_Attrition.csv", row.names = TRUE)
+
+
+```
+
+
+
+```{r}
+
+library(shiny)
+library(ggplot2)
+library(scales)
+
+
+#Make the APP
+
+df <- read.csv("Data/CaseStudy2-data.csv", stringsAsFactors = TRUE)
+
+df <- data.frame(df)
+
+# UI elements
+ui <- fluidPage(
+  titlePanel("Attrition by Job Role at Frito Lay"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("job_role", "Select Job Role:", choices = unique(df$JobRole))
+    ),
+    mainPanel(
+      plotOutput("plot")
+    )
+  )
+)
+
+# Server logic
+server <- function(input, output, session) {
+  df_shiny <- reactive({
+    df %>%
+      filter(JobRole == input$job_role)
+  })
+  
+  output$plot <- renderPlot({
+    data <- df_shiny()
+    ggplot(data, aes(x = JobRole, fill = Attrition)) +
+      geom_bar(position = "stack", width = 0.7) +
+      geom_text(aes(label = paste0(round((..count..)/sum(..count..) * 100), "%")), 
+                stat = "count", position = position_stack(vjust = 0.5), size = 3) +
+      labs(title = "Job Role and Attrition", y = "Percentage") +
+      scale_fill_manual(values = c("#59c3c3",  "#F9C80E"), name = "Attrition") +
+      theme_minimal() 
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+
+#The income Data
+
+```{r}
+library(olsrr)
+library(caret)
+
+#Bring in the Dataset
+setwd("C:/Users/willj/OneDrive - Southern Methodist University/Data Science Master's Degree/1 SMU Courses/Doing Data Science/Week 14 - Apr 9  2024/")
+
+df <- read.csv("Data/CaseStudy2-data.csv", stringsAsFactors = TRUE)
+
+#Take out the variables I do not need for the regression model 
+df = subset(df, select  = -c(ID, EmployeeCount, Over18, StandardHours, Attrition, EmployeeNumber, HourlyRate))
+
+#Estimate a model that includes all the covariates in the dataset to predict income
+model = lm(MonthlyIncome ~ ., data = df)
+summary(model)
+autoplot(model, which = 1:6, nrow = 3, ncol = 2)
+
+#Now use Best subset selection to identigy the best models for this
+FWDfit = ols_step_forward_aic(model)
+FWDfit
+
+
+# With forward selection, these were the variables to include in the model
+
+# => JobLevel 
+# => JobRole 
+# => TotalWorkingYears 
+# => BusinessTravel 
+# => Gender 
+# => DailyRate 
+# => MonthlyRate 
+# => YearsWithCurrManager 
+# => YearsSinceLastPromotion 
+# => DistanceFromHome
+
+
+#Cross validate our model with these variables 
+n = length(df$MonthlyIncome)
+n
+set.seed(1)
+Z = sample(n, n * .80)
+Z
+training = df[Z,]
+testing = df[-Z,]
+
+model = train(MonthlyIncome ~ JobLevel + JobRole + TotalWorkingYears + BusinessTravel + Gender + DailyRate + MonthlyRate + YearsWithCurrManager + YearsSinceLastPromotion + DistanceFromHome, data = training)
+
+
+
+pred.test =  predict(model, testing) 
+
+#RMSE
+sqrt(mean((pred.test - testing$MonthlyIncome)^2))
+
+
+#Use the data to predict salary for varaibles we don't know
+
+explanatory_data <- read_csv("Data/CaseStudy2CompSet No Salary.csv")
+explanatory_data = as_tibble(explanatory_data)
+
+prediction_data <- explanatory_data %>%  
+  mutate(MonthlyIncome = predict(model, explanatory_data)) 
+
+Comp_Dataset = subset(prediction_data, select  = c(ID, MonthlyIncome))
+
+write.csv(Comp_Dataset, "Case2PredictionsJones_Salary.csv", row.names = TRUE)
+
+```
+
